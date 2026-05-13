@@ -79,51 +79,64 @@
  * AN8811H 2.5G PHY (BE5000 reaches the 2.5G uplink through the XPON
  * stack, RFB has no uplink PHY). The eth / qdma / mdio / gsw_phy
  * skeleton lives in an7563.dtsi - enable here per board.
+ *
+ * NOTE: on the first AN7563 RFB boot the airoha_eth driver passes
+ * reset_control_bulk_get / hw_init / qdma_init successfully but then
+ * panics inside for_each_child_of_node() with a corrupted OF
+ * property->name pointer. The OF tree itself looks correct in dtb
+ * hex dump and the same driver path works on AN7581 hardware, so
+ * this is most likely an AArch32 ABI / sizeof corner case in the
+ * driver rather than a DT problem.
+ *
+ * Until the panic is root-caused, keep the ethernet block disabled
+ * here so the board still boots all the way to a shell - readers
+ * can flip these to "okay" once a fix is in. The SoC-level skeleton
+ * lives in an7563.dtsi and stays intact regardless.
  */
 &eth {
-	status = "okay";
+	status = "disabled";
 };
 
 &gdm1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &switch {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port1 {
 	label = "lan1";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port2 {
 	label = "lan2";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port3 {
 	label = "lan3";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port4 {
 	label = "lan4";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy3 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy4 {
-	status = "okay";
+	status = "disabled";
 };
