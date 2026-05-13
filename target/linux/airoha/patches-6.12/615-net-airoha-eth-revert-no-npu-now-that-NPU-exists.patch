@@ -1,0 +1,38 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 02:18:00 +0800
+Subject: [PATCH] net: airoha: eth - drop no_npu CDM1 bypass for AN7563
+
+The previous patch (613) forced airoha_dev_open() to forward GDM
+traffic directly to FE_PSE_PORT_CDM1 (QDMA CPU DMA), bypassing PPE,
+on the assumption that AN7563 had no usable NPU bring-up path. That
+turned out to be incorrect - the EcoNet GPL drop ships a tiny but
+fully functional NPU firmware blob (~90 KB rv32 + ~3 KB data) and
+the AN7563 NPU MMIO block is register-compatible with EN7581
+(verified against the GPL ecnt_npu.c source).
+
+With the new airoha,an7563-npu DT compatible (patch 614) and the
+airoha-an7563-npu-firmware package wired in, the upstream
+airoha_ppe_offload_setup() -> NPU bring-up path now runs on AN7563,
+so we no longer need to short-circuit GDM_FWD_CFG. Drop the CDM1
+bypass and let airoha_dev_open() use its normal FE_PSE_PORT_PPE1
+route.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -3584,7 +3584,13 @@ static const struct airoha_eth_soc_data
+ 	.num_xsi_rsts = ARRAY_SIZE(en7581_xsi_rsts_names),
+ 	.num_ppe = 1,
+ 	.ppe_skip_flush_sram = true,
+-	.no_npu = true,
++	/*
++	 * With airoha,an7563-npu node + an7563_npu_{rv32,data}.bin
++	 * firmware in place, the upstream PPE/NPU bring-up path now
++	 * runs, so we do NOT need to bypass PPE via CDM1 forwarding.
++	 * Keep .no_npu = false (default) so airoha_dev_open() uses
++	 * the standard FE_PSE_PORT_PPE1 route.
++	 */
+ 	/*
+ 	 * AN7563 silicon shares the EN7581 frame-engine and source-port
+ 	 * encoding (verified against the GPL en7523.dtsi and Xiaomi

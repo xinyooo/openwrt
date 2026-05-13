@@ -1,0 +1,161 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 02:15:00 +0800
+Subject: [PATCH] net: airoha: npu - add AN7563 SoC variant
+
+AN7563 ships with the same EN7581-family NPU MMIO block (verified
+register-for-register against the EcoNet GPL ecnt_npu.c source) but
+with only 2 RV32 cores instead of 8, no WLAN-offload IRQ lines, and a
+much smaller firmware blob (~90 KB rv32 + ~3 KB data from the GPL
+drop instead of ~2 MB / 64 KB on EN7581).
+
+Add an explicit airoha,an7563-npu compatible carrying:
+
+  * num_cores       - how many BOOT_BASE registers to program and the
+                      width of the BOOT_CONFIG cores-enable bitmask
+                      (default NPU_NUM_CORES = 8 when zero)
+  * no_wlan_offload - when true, skip the wlan IRQ request loop
+                      (AN7563 only has 1 mbox + 6 generic NPU IRQs,
+                      no wlan IRQ lines at all)
+
+This lets the upstream airoha_npu driver bring up the AN7563 NPU using
+the GPL-extracted firmware shipped by the new airoha-an7563-npu-firmware
+package, without touching the EN7581 / AN7583 fast paths.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -20,6 +20,8 @@
+ #define NPU_EN7581_7996_FIRMWARE_RV32		"airoha/en7581_MT7996_npu_rv32.bin"
+ #define NPU_AN7583_FIRMWARE_DATA		"airoha/an7583_npu_data.bin"
+ #define NPU_AN7583_FIRMWARE_RV32		"airoha/an7583_npu_rv32.bin"
++#define NPU_AN7563_FIRMWARE_DATA		"airoha/an7563_npu_data.bin"
++#define NPU_AN7563_FIRMWARE_RV32		"airoha/an7563_npu_rv32.bin"
+ #define NPU_EN7581_FIRMWARE_RV32_MAX_SIZE	0x200000
+ #define NPU_EN7581_FIRMWARE_DATA_MAX_SIZE	0x10000
+ #define NPU_DUMP_SIZE				512
+@@ -115,6 +117,16 @@
+ struct airoha_npu_soc_data {
+ 	struct airoha_npu_fw fw_rv32;
+ 	struct airoha_npu_fw fw_data;
++	/*
++	 * Number of physical RV32 cores this NPU implements. Default
++	 * (when zero) is NPU_NUM_CORES (EN7581 = 8). AN7563 only has 2.
++	 */
++	unsigned int num_cores;
++	/*
++	 * Set true when the NPU has no dedicated WLAN-offload IRQ lines
++	 * (AN7563 has only mbox + 6 NPU generic IRQs, no WLAN IRQ lines).
++	 */
++	bool no_wlan_offload;
+ };
+ 
+ #define MBOX_MSG_FUNC_ID	GENMASK(14, 11)
+@@ -675,9 +687,31 @@
+ 	},
+ };
+ 
++/*
++ * AN7563 ships with a much smaller NPU than EN7581/AN7583: only two
++ * RV32 cores and a tiny firmware (~90 KB rv32 + ~3 KB data extracted
++ * from the EcoNet GPL drop). The hardware register layout is the
++ * EN7581 family layout (verified against ECNT_NPU.C GPL source), so
++ * we can reuse the upstream driver as long as we let it know how
++ * many cores to boot and that there are no WLAN-offload IRQ lines.
++ */
++static const struct airoha_npu_soc_data an7563_npu_soc_data = {
++	.fw_rv32 = {
++		.name = NPU_AN7563_FIRMWARE_RV32,
++		.max_size = NPU_EN7581_FIRMWARE_RV32_MAX_SIZE,
++	},
++	.fw_data = {
++		.name = NPU_AN7563_FIRMWARE_DATA,
++		.max_size = NPU_EN7581_FIRMWARE_DATA_MAX_SIZE,
++	},
++	.num_cores = 2,
++	.no_wlan_offload = true,
++};
++
+ static const struct of_device_id of_airoha_npu_match[] = {
+ 	{ .compatible = "airoha,en7581-npu", .data = &en7581_npu_soc_data },
+ 	{ .compatible = "airoha,an7583-npu", .data = &an7583_npu_soc_data },
++	{ .compatible = "airoha,an7563-npu", .data = &an7563_npu_soc_data },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, of_airoha_npu_match);
+@@ -693,13 +727,27 @@
+ static int airoha_npu_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
++	const struct airoha_npu_soc_data *soc_data;
+ 	struct reserved_mem *rmem;
+ 	struct airoha_npu *npu;
+ 	struct device_node *np;
++	unsigned int num_cores, num_wlan_irqs;
+ 	void __iomem *base;
+ 	int i, irq, err;
+ 	u32 val;
+ 
++	soc_data = of_device_get_match_data(dev);
++	if (!soc_data)
++		return -EINVAL;
++	num_cores = soc_data->num_cores ? : NPU_NUM_CORES;
++	num_wlan_irqs = soc_data->no_wlan_offload ? 0 : NPU_NUM_IRQ;
++	/* sanity: never exceed compile-time array bounds */
++	num_cores = min_t(unsigned int, num_cores, NPU_NUM_CORES);
++	num_wlan_irqs = min_t(unsigned int, num_wlan_irqs, NPU_NUM_IRQ);
++	dev_info(dev,
++		 "AN7563 dbg: npu probe num_cores=%u num_wlan_irqs=%u fw=%s\n",
++		 num_cores, num_wlan_irqs, soc_data->fw_rv32.name);
++
+ 	base = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(base))
+ 		return PTR_ERR(base);
+@@ -746,7 +794,7 @@
+ 	if (err)
+ 		return err;
+ 
+-	for (i = 0; i < ARRAY_SIZE(npu->cores); i++) {
++	for (i = 0; i < num_cores; i++) {
+ 		struct airoha_npu_core *core = &npu->cores[i];
+ 
+ 		spin_lock_init(&core->lock);
+@@ -764,9 +812,9 @@
+ 		INIT_WORK(&core->wdt_work, airoha_npu_wdt_work);
+ 	}
+ 
+-	/* wlan IRQ lines */
+-	for (i = 0; i < ARRAY_SIZE(npu->irqs); i++) {
+-		irq = platform_get_irq(pdev, i + ARRAY_SIZE(npu->cores) + 1);
++	/* wlan IRQ lines (some SoCs - e.g. AN7563 - have none) */
++	for (i = 0; i < num_wlan_irqs; i++) {
++		irq = platform_get_irq(pdev, i + num_cores + 1);
+ 		if (irq < 0)
+ 			return irq;
+ 
+@@ -789,12 +837,13 @@
+ 	msleep(100);
+ 
+ 	/* setting booting address */
+-	for (i = 0; i < NPU_NUM_CORES; i++)
++	for (i = 0; i < num_cores; i++)
+ 		regmap_write(npu->regmap, REG_CR_BOOT_BASE(i), rmem->base);
+ 	usleep_range(1000, 2000);
+ 
+-	/* enable NPU cores */
+-	regmap_write(npu->regmap, REG_CR_BOOT_CONFIG, 0xff);
++	/* enable NPU cores (bitmask: 0xff for 8 cores on EN7581, 0x03 for AN7563) */
++	regmap_write(npu->regmap, REG_CR_BOOT_CONFIG,
++		     (1U << num_cores) - 1U);
+ 	regmap_write(npu->regmap, REG_CR_BOOT_TRIGGER, 0x1);
+ 	msleep(100);
+ 
+@@ -833,6 +882,8 @@
+ MODULE_FIRMWARE(NPU_EN7581_7996_FIRMWARE_RV32);
+ MODULE_FIRMWARE(NPU_AN7583_FIRMWARE_DATA);
+ MODULE_FIRMWARE(NPU_AN7583_FIRMWARE_RV32);
++MODULE_FIRMWARE(NPU_AN7563_FIRMWARE_DATA);
++MODULE_FIRMWARE(NPU_AN7563_FIRMWARE_RV32);
+ MODULE_LICENSE("GPL");
+ MODULE_AUTHOR("Lorenzo Bianconi <lorenzo@kernel.org>");
+ MODULE_DESCRIPTION("Airoha Network Processor Unit driver");

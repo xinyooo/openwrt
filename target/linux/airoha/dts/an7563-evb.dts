@@ -88,6 +88,10 @@
  * so a follow-up panic - if any - can be pinned down to a specific
  * step instead of just "somewhere in airoha_probe".
  */
+&npu {
+	status = "okay";
+};
+
 &eth {
 	status = "okay";
 };

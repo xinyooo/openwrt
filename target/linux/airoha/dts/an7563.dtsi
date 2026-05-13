@@ -92,6 +92,17 @@
 			no-map;
 			reg = <0x89000000 0x1000000>;
 		};
+
+		/*
+		 * NPU firmware reserved region. AN7563 NPU firmware
+		 * blobs from the EcoNet GPL drop are tiny (~90 KB rv32 +
+		 * ~3 KB data); 4 MB is plenty including the upstream
+		 * driver's RV32_MAX_SIZE=2 MB layout slot.
+		 */
+		npu_binary: npu-binary@84000000 {
+			no-map;
+			reg = <0x84000000 0x400000>;
+		};
 	};
 
 	psci {
@@ -508,6 +519,35 @@
 		 * GDM2/GDM3/GDM4 remain disabled by default since AN7563
 		 * SKUs in this OpenWrt subtarget do not use the PCS path.
 		 */
+		/*
+		 * AN7563 NPU - structurally the same EN7581-family NPU
+		 * MMIO block (register map verified byte-for-byte against
+		 * the EcoNet GPL ecnt_npu.c source), but with only 2 RV32
+		 * cores instead of 8 and no WLAN offload IRQ lines (so
+		 * the IRQ list is just 1 mbox + 6 generic NPU IRQs, total
+		 * 7 - same as the GPL en7523.dtsi npu@1e800000 block).
+		 *
+		 * Firmware blobs (an7563_npu_rv32.bin / an7563_npu_data.bin)
+		 * come from the EcoNet GPL drop and live in
+		 * /lib/firmware/airoha/, shipped by the airoha-an7563-npu
+		 * -firmware package.
+		 */
+		npu: npu@1e900000 {
+			compatible = "airoha,an7563-npu";
+			reg = <0x1e900000 0x313000>;
+			memory-region = <&npu_binary>;
+			memory-region-names = "binary";
+			interrupt-parent = <&gic>;
+			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>, /* mbox */
+				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>, /* core 0 wdt */
+				     <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>, /* core 1 wdt */
+				     <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>, /* tr_done (reserved) */
+				     <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>, /* hadap0 (reserved) */
+				     <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>, /* hadap1 (reserved) */
+				     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>; /* hadap2 (reserved) */
+			status = "disabled";
+		};
+
 		eth: ethernet@1fb50000 {
 			compatible = "airoha,an7563-eth";
 			reg = <0x1fb50000 0x2600>,
@@ -556,6 +596,8 @@
 
 			memory-region = <&qdma0_buf>, <&qdma1_buf>;
 			memory-region-names = "qdma0-buf", "qdma1-buf";
+
+			airoha,npu = <&npu>;
 
 			status = "disabled";
 
