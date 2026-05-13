@@ -72,3 +72,58 @@
 		};
 	};
 };
+
+/*
+ * Ethernet bring-up: AN7563 RFB and Xiaomi BE5000 both use the on-chip
+ * 5-port Gigabit Switch behind GDM1; neither board wires an external
+ * AN8811H 2.5G PHY (BE5000 reaches the 2.5G uplink through the XPON
+ * stack, RFB has no uplink PHY). The eth / qdma / mdio / gsw_phy
+ * skeleton lives in an7563.dtsi - enable here per board.
+ */
+&eth {
+	status = "okay";
+};
+
+&gdm1 {
+	status = "okay";
+};
+
+&switch {
+	status = "okay";
+};
+
+&gsw_port1 {
+	label = "lan1";
+	status = "okay";
+};
+
+&gsw_port2 {
+	label = "lan2";
+	status = "okay";
+};
+
+&gsw_port3 {
+	label = "lan3";
+	status = "okay";
+};
+
+&gsw_port4 {
+	label = "lan4";
+	status = "okay";
+};
+
+&gsw_phy1 {
+	status = "okay";
+};
+
+&gsw_phy2 {
+	status = "okay";
+};
+
+&gsw_phy3 {
+	status = "okay";
+};
+
+&gsw_phy4 {
+	status = "okay";
+};
