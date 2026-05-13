@@ -1,0 +1,35 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 00:55:00 +0800
+Subject: [PATCH] net: airoha: AN7563 debug - log RX sptag value (TEMP)
+
+Temporary trace to figure out what sptag value the AN7563 frame engine
+actually fills into QDMA_ETH_RXMSG_SPTAG. With EN7581 SPTAG mode the
+mt7530 driver enables CPORT_SW2FE_STAG_EN, but on AN7563 silicon the
+RX path is silently dropping packets in net/dsa/tag.c::dsa_switch_rcv()
+because dsa_conduit_find_user(dev, 0, sptag) returns NULL.
+
+This patch is *debug only*, drop before submitting.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -709,9 +709,16 @@ static int airoha_qdma_rx_process(struct
+ 			 */
+ 			u32 msg0 = le32_to_cpu(READ_ONCE(desc->msg0));
+ 			u32 sptag = FIELD_GET(QDMA_ETH_RXMSG_SPTAG, msg0);
++			bool valid = sptag < ARRAY_SIZE(port->dsa_meta) &&
++				     port->dsa_meta[sptag];
++
++			dev_info_ratelimited(eth->dev,
++				"AN7563 RX: msg0=0x%08x sptag=%u meta=%s port_id=%u\n",
++				msg0, sptag, valid ? "valid" : "NULL",
++				valid ? (u32)port->dsa_meta[sptag]->u.port_info.port_id
++				      : 0);
+ 
+-			if (sptag < ARRAY_SIZE(port->dsa_meta) &&
+-			    port->dsa_meta[sptag])
++			if (valid)
+ 				skb_dst_set_noref(q->skb,
+ 						  &port->dsa_meta[sptag]->dst);
+ 		}
