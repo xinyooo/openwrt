@@ -46,28 +46,25 @@
 	#size-cells = <1>;
 
 	/*
-	 * Reserve QDMA0 / QDMA1 hwfd buffer pools at fixed physical
-	 * addresses so the airoha_eth driver can map them via
-	 * memory-region. Vendor BL2/BL31 reserves the first 0x88000 of
-	 * DRAM (see arch/arm/Makefile textofs=0x00088000); board DTS
-	 * may further extend reserved-memory if a NPU firmware area or
-	 * dying-gasp save region is added.
+	 * The airoha_eth driver expects qdma0-buf / qdma1-buf
+	 * reserved-memory regions for the hwfd buffer pools on
+	 * AArch64 EN7581 (32 MiB + 16 MiB at 0x87000000 / 0x89000000).
+	 *
+	 * On the AArch32 AN7563 RFB the same reserved-memory layout
+	 * causes the driver to wedge during airoha_ppe_init() / qdma
+	 * hwfd LMGR initialisation - the next thing the kernel does is
+	 * iterate the eth child nodes and panic on a freshly corrupted
+	 * OF property->name pointer (0xff875662 = FIXADDR window).
+	 *
+	 * Drop the reserved-memory declaration so the driver falls back
+	 * to dmam_alloc_coherent() for the smaller HW_DSCP_NUM-sized
+	 * pool. This is enough to validate the eth / GSW / DSA path on
+	 * AN7563 RFB even though the hwfd pool ends up at <= 4 MiB. The
+	 * full 32+16 MiB pool can be re-introduced once the driver path
+	 * is understood (likely a 32-bit dma_addr_t vs LPAE / sizeof
+	 * issue inside airoha_qdma_init_hfwd_queues() that only kicks
+	 * in once the LMGR engine starts walking the reserved region).
 	 */
-	reserved-memory {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
-
-		qdma0_buf: qdma0-buf@87000000 {
-			no-map;
-			reg = <0x87000000 0x2000000>;
-		};
-
-		qdma1_buf: qdma1-buf@89000000 {
-			no-map;
-			reg = <0x89000000 0x1000000>;
-		};
-	};
 
 	psci {
 		compatible = "arm,psci-0.2";
@@ -528,9 +525,6 @@
 				     <GIC_SPI 60 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 64 IRQ_TYPE_LEVEL_HIGH>;
-
-			memory-region = <&qdma0_buf>, <&qdma1_buf>;
-			memory-region-names = "qdma0-buf", "qdma1-buf";
 
 			status = "disabled";
 
