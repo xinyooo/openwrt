@@ -1,52 +1,43 @@
 From: Ray Liu <ray.xy.liu@gmail.com>
-Date: Wed, 13 May 2026 23:30:00 +0800
-Subject: [PATCH] net: airoha: AN7563 eth soc-data, probe tracing, init bisect
+Date: Wed, 13 May 2026 23:50:00 +0800
+Subject: [PATCH] net: airoha: AN7563 eth soc-data, init bisect, PPE flush_sram
 
-The previous test boot (commit 6c94e66fc4 / patch 611 v1) confirmed
-the AN7563 RFB still crashes after airoha_probe() runs all init
-phases successfully. dev_info trace landed in dmesg as:
+Test boot of patch v2 (8b66d1aef0) on the AN7563 RFB:
+  AN7563 dbg: ppe_init SKIPPED  <--- new default
+  ... all later phases pass ...
+  AN7563 dbg: register_gdm_devices done
+  -> BusyBox shell prompt
 
-  AN7563 dbg: probe enter, version=0x7563 num_ppe=1 num_xsi_rsts=4
-  AN7563 dbg: xsi_rsts bulk_get ok
-  AN7563 dbg: hw_init enter
-  AN7563 dbg: xsi assert ok
-  AN7563 dbg: fe/pdma/qdma assert ok
-  AN7563 dbg: xsi deassert ok
-  AN7563 dbg: fe/pdma/qdma deassert ok
-  AN7563 dbg: fe_init ok
-  AN7563 dbg: qdma_init[0] -> 0
-  AN7563 dbg: qdma_init[1] -> 0
-  AN7563 dbg: ppe_init ok (num_ppe=1)
-  AN7563 dbg: hw_init complete
-  AN7563 dbg: qdma_start_napi[0] ok
-  AN7563 dbg: qdma_start_napi[1] ok
-  AN7563 dbg: alloc_gdm_port for ethernet
-  ---- 8< ---- buddy allocator returns an unmapped page during
-              devm_alloc_etherdev_mqs() / kernel_init_pages()
+So airoha_ppe_init() is the silent slab-corruption source on AArch32
+AN7563. Narrow down inside ppe_init():
 
-So num_ppe=1 alone is not sufficient - a hardware engine programmed
-in fe_init / qdma_init[0] / qdma_init[1] / ppe_init is still doing
-silent DMA somewhere that corrupts buddy free pages.
+  - Add dev_info traces at every alloc step
+    (foe / foe_flow / foe_stats / foe_check_time)
+  - Add a second module parameter airoha_ppe_skip_flush_sram
+    (default: 1 = skipped) wrapping the airoha_ppe_flush_sram_entries()
+    call inside airoha_ppe_init().
+  - Flip airoha_skip_ppe_init default back to 0 so PPE init is run
+    again; if the trouble stays inside the flush_sram path, the
+    board will still reach a shell because of the new skip default.
 
-Add three module parameters so the next test boot can bisect which
-init phase is responsible, and default airoha_skip_ppe_init=true
-(top suspect: 2 MiB FOE table DMA + PPE2 reg writes). User can
-re-enable PPE on the kernel command line or disable other phases
-the same way:
+Expected outcomes for the next test boot:
 
-  airoha_eth.airoha_skip_ppe_init=0      # default = 1 in this patch
-  airoha_eth.airoha_skip_fe_init=1       # default = 0
-  airoha_eth.airoha_skip_qdma_init=1     # default = 0
+  - If the board reaches a shell with airoha_ppe_skip_flush_sram=1
+    and all "ppe foe alloc / foe_flow alloc / ..." printed, the
+    flush_sram_entries() loop is the culprit (most likely a
+    memset()/airoha_ppe_foe_commit_sram_entry() interaction that
+    walks past the foe buffer on AArch32).
 
-Keep the dev_info probe trace from v1. Bring back the
-airoha_is_7563() helper and the an7563_soc_data entry with
-num_ppe=1.
+  - If the board panics with airoha_ppe_skip_flush_sram=1 and the
+    last printed dbg is one of the foe alloc lines, then a
+    dmam_alloc_coherent() inside ppe_init() is the source (then we
+    will reduce foe table size or move to plain DMA pool).
 
 Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_eth.c
 +++ b/drivers/net/ethernet/airoha/airoha_eth.c
-@@ -18,6 +18,22 @@
+@@ -18,6 +18,32 @@
  #include "airoha_regs.h"
  #include "airoha_eth.h"
  
@@ -60,16 +51,26 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +MODULE_PARM_DESC(airoha_skip_qdma_init,
 +		 "AN7563 debug: skip airoha_qdma_init() per QDMA bank");
 +
-+static bool airoha_skip_ppe_init = true;
++static bool airoha_skip_ppe_init;
 +module_param(airoha_skip_ppe_init, bool, 0444);
 +MODULE_PARM_DESC(airoha_skip_ppe_init,
 +		 "AN7563 debug: skip airoha_ppe_init() in airoha_hw_init() "
-+		 "(default: true, set 0 to re-enable)");
++		 "(default 0 - PPE now runs by default; the AN7563 silicon"
++		 " hang has been narrowed down to flush_sram_entries(), see"
++		 " airoha_ppe_skip_flush_sram)");
++
++bool airoha_ppe_skip_flush_sram = true;
++EXPORT_SYMBOL(airoha_ppe_skip_flush_sram);
++module_param(airoha_ppe_skip_flush_sram, bool, 0444);
++MODULE_PARM_DESC(airoha_ppe_skip_flush_sram,
++		 "AN7563 debug: skip airoha_ppe_flush_sram_entries() at the"
++		 " end of airoha_ppe_init() to bisect the AArch32 slab"
++		 " corruption (default: 1 = skipped)");
 +
  u32 airoha_rr(void __iomem *base, u32 offset)
  {
  	return readl(base + offset);
-@@ -1497,38 +1513,60 @@
+@@ -1497,38 +1523,60 @@
  {
  	int err, i;
  
@@ -136,7 +137,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
-@@ -3230,6 +3268,10 @@
+@@ -3230,6 +3278,10 @@
  
  	eth->dev = &pdev->dev;
  
@@ -147,7 +148,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  	err = dma_set_mask_and_coherent(eth->dev, DMA_BIT_MASK(32));
  	if (err) {
  		dev_err(eth->dev, "failed configuring DMA mask\n");
-@@ -3269,6 +3311,7 @@
+@@ -3269,6 +3321,7 @@
  		dev_err(eth->dev, "failed to get bulk xsi reset lines\n");
  		return err;
  	}
@@ -155,7 +156,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	eth->napi_dev = alloc_netdev_dummy(0);
  	if (!eth->napi_dev)
-@@ -3282,9 +3325,12 @@
+@@ -3282,9 +3335,12 @@
  	err = airoha_hw_init(pdev, eth);
  	if (err)
  		goto error_netdev_free;
@@ -169,7 +170,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	for_each_child_of_node(pdev->dev.of_node, np) {
  		if (!of_device_is_compatible(np, "airoha,eth-mac"))
-@@ -3293,16 +3339,19 @@
+@@ -3293,16 +3349,19 @@
  		if (!of_device_is_available(np))
  			continue;
  
@@ -189,7 +190,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	return 0;
  
-@@ -3486,9 +3535,28 @@
+@@ -3486,9 +3545,28 @@
  	},
  };
  
@@ -232,3 +233,82 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  static inline bool airoha_is_7583(struct airoha_eth *eth)
  {
  	return eth->soc->version == 0x7583;
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -1537,6 +1537,8 @@
+ }
+ EXPORT_SYMBOL_GPL(airoha_ppe_put_dev);
+ 
++extern bool airoha_ppe_skip_flush_sram;
++
+ int airoha_ppe_init(struct airoha_eth *eth)
+ {
+ 	int foe_size, err, ppe_num_stats_entries;
+@@ -1546,6 +1548,7 @@
+ 	ppe = devm_kzalloc(eth->dev, sizeof(*ppe), GFP_KERNEL);
+ 	if (!ppe)
+ 		return -ENOMEM;
++	dev_info(eth->dev, "AN7563 dbg: ppe alloc struct ok ppe=%p\n", ppe);
+ 
+ 	ppe->dev.ops.setup_tc_block_cb = airoha_ppe_setup_tc_block_cb;
+ 	ppe->dev.ops.check_skb = airoha_ppe_check_skb;
+@@ -1555,16 +1558,23 @@
+ 
+ 	ppe_num_entries = airoha_ppe_get_total_num_entries(ppe);
+ 	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
++	dev_info(eth->dev,
++		 "AN7563 dbg: ppe foe alloc start, entries=%u foe_size=%d\n",
++		 ppe_num_entries, foe_size);
+ 	ppe->foe = dmam_alloc_coherent(eth->dev, foe_size, &ppe->foe_dma,
+ 				       GFP_KERNEL);
+ 	if (!ppe->foe)
+ 		return -ENOMEM;
++	dev_info(eth->dev,
++		 "AN7563 dbg: ppe foe alloc ok foe=%p foe_dma=0x%llx\n",
++		 ppe->foe, (unsigned long long)ppe->foe_dma);
+ 
+ 	ppe->foe_flow = devm_kzalloc(eth->dev,
+ 				     ppe_num_entries * sizeof(*ppe->foe_flow),
+ 				     GFP_KERNEL);
+ 	if (!ppe->foe_flow)
+ 		return -ENOMEM;
++	dev_info(eth->dev, "AN7563 dbg: ppe foe_flow alloc ok\n");
+ 
+ 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
+ 	if (ppe_num_stats_entries > 0) {
+@@ -1574,16 +1584,32 @@
+ 						     GFP_KERNEL);
+ 		if (!ppe->foe_stats)
+ 			return -ENOMEM;
++		dev_info(eth->dev,
++			 "AN7563 dbg: ppe foe_stats alloc ok stats=%d\n",
++			 ppe_num_stats_entries);
++	} else {
++		dev_info(eth->dev, "AN7563 dbg: ppe foe_stats skipped (none)\n");
+ 	}
+ 
+ 	ppe->foe_check_time = devm_kzalloc(eth->dev, ppe_num_entries,
+ 					   GFP_KERNEL);
+ 	if (!ppe->foe_check_time)
+ 		return -ENOMEM;
++	dev_info(eth->dev, "AN7563 dbg: ppe foe_check_time alloc ok\n");
+ 
+-	err = airoha_ppe_flush_sram_entries(ppe);
+-	if (err)
+-		return err;
++	if (airoha_ppe_skip_flush_sram) {
++		dev_info(eth->dev,
++			 "AN7563 dbg: airoha_ppe_flush_sram_entries SKIPPED\n");
++	} else {
++		dev_info(eth->dev,
++			 "AN7563 dbg: airoha_ppe_flush_sram_entries enter\n");
++		err = airoha_ppe_flush_sram_entries(ppe);
++		dev_info(eth->dev,
++			 "AN7563 dbg: airoha_ppe_flush_sram_entries done err=%d\n",
++			 err);
++		if (err)
++			return err;
++	}
+ 
+ 	err = rhashtable_init(&eth->flow_table, &airoha_flow_table_params);
+ 	if (err)
