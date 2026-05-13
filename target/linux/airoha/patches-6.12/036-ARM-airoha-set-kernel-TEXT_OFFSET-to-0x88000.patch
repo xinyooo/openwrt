@@ -32,11 +32,10 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 
 --- a/arch/arm/Kconfig.platforms
 +++ b/arch/arm/Kconfig.platforms
-@@ -76,6 +76,15 @@ config ARCH_AIROHA
- 	select HAVE_ARM_ARCH_TIMER
+@@ -78,6 +78,15 @@ config ARCH_AIROHA
  	help
  	  Support for Airoha EN7523 SoCs
-+
+ 
 +config SOC_AIROHA_AN7563
 +	bool "Airoha AN7563 / AN7552 (dual Cortex-A53 AArch32) layout"
 +	depends on ARCH_AIROHA
@@ -45,12 +44,13 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	  reserves the first 0x88000 bytes of DRAM for ATF (BL31 + TZRAM
 +	  pads) and expects the kernel to be linked at that offset above
 +	  the DRAM base instead of the ARM default 0x8000.
- 
++
  config MACH_ASM9260
  	bool "Alphascale ASM9260"
+ 	depends on ARCH_MULTI_V5
 --- a/arch/arm/Makefile
 +++ b/arch/arm/Makefile
-@@ -167,6 +167,8 @@ endif
+@@ -168,6 +168,8 @@ endif
  textofs-$(CONFIG_ARCH_QCOM_RESERVE_SMEM) := 0x00208000
  textofs-$(CONFIG_ARCH_MESON) := 0x00208000
  textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000

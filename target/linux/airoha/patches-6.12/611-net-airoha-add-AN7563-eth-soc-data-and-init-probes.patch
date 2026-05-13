@@ -70,7 +70,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  u32 airoha_rr(void __iomem *base, u32 offset)
  {
  	return readl(base + offset);
-@@ -1497,38 +1525,60 @@
+@@ -1497,38 +1525,60 @@ static int airoha_hw_init(struct platfor
  {
  	int err, i;
  
@@ -137,7 +137,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	set_bit(DEV_STATE_INITIALIZED, &eth->state);
  
-@@ -3230,6 +3280,10 @@
+@@ -3230,6 +3280,10 @@ static int airoha_probe(struct platform_
  
  	eth->dev = &pdev->dev;
  
@@ -148,7 +148,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  	err = dma_set_mask_and_coherent(eth->dev, DMA_BIT_MASK(32));
  	if (err) {
  		dev_err(eth->dev, "failed configuring DMA mask\n");
-@@ -3269,6 +3323,7 @@
+@@ -3269,6 +3323,7 @@ static int airoha_probe(struct platform_
  		dev_err(eth->dev, "failed to get bulk xsi reset lines\n");
  		return err;
  	}
@@ -156,7 +156,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	eth->napi_dev = alloc_netdev_dummy(0);
  	if (!eth->napi_dev)
-@@ -3282,9 +3337,12 @@
+@@ -3282,9 +3337,12 @@ static int airoha_probe(struct platform_
  	err = airoha_hw_init(pdev, eth);
  	if (err)
  		goto error_netdev_free;
@@ -170,7 +170,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	for_each_child_of_node(pdev->dev.of_node, np) {
  		if (!of_device_is_compatible(np, "airoha,eth-mac"))
-@@ -3293,16 +3351,19 @@
+@@ -3293,16 +3351,19 @@ static int airoha_probe(struct platform_
  		if (!of_device_is_available(np))
  			continue;
  
@@ -190,7 +190,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	return 0;
  
-@@ -3486,9 +3547,41 @@
+@@ -3486,9 +3547,41 @@ static const struct airoha_eth_soc_data
  	},
  };
  
@@ -234,7 +234,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  MODULE_DEVICE_TABLE(of, of_airoha_match);
 --- a/drivers/net/ethernet/airoha/airoha_eth.h
 +++ b/drivers/net/ethernet/airoha/airoha_eth.h
-@@ -583,6 +583,17 @@
+@@ -583,6 +583,17 @@ struct airoha_eth_soc_data {
  	const char * const *xsi_rsts_names;
  	int num_xsi_rsts;
  	int num_ppe;
@@ -252,7 +252,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  	struct {
  		int (*get_src_port_id)(struct airoha_gdm_port *port, int nbq);
  		u32 (*get_vip_port)(struct airoha_gdm_port *port, int nbq);
-@@ -656,6 +667,11 @@
+@@ -656,6 +667,11 @@ static inline bool airoha_is_7581(struct
  	return eth->soc->version == 0x7581;
  }
  
@@ -266,7 +266,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  	return eth->soc->version == 0x7583;
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -1537,6 +1537,8 @@
+@@ -1537,6 +1537,8 @@ void airoha_ppe_put_dev(struct airoha_pp
  }
  EXPORT_SYMBOL_GPL(airoha_ppe_put_dev);
  
@@ -275,7 +275,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  int airoha_ppe_init(struct airoha_eth *eth)
  {
  	int foe_size, err, ppe_num_stats_entries;
-@@ -1546,6 +1548,7 @@
+@@ -1546,6 +1548,7 @@ int airoha_ppe_init(struct airoha_eth *e
  	ppe = devm_kzalloc(eth->dev, sizeof(*ppe), GFP_KERNEL);
  	if (!ppe)
  		return -ENOMEM;
@@ -283,7 +283,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	ppe->dev.ops.setup_tc_block_cb = airoha_ppe_setup_tc_block_cb;
  	ppe->dev.ops.check_skb = airoha_ppe_check_skb;
-@@ -1555,16 +1558,23 @@
+@@ -1555,16 +1558,23 @@ int airoha_ppe_init(struct airoha_eth *e
  
  	ppe_num_entries = airoha_ppe_get_total_num_entries(ppe);
  	foe_size = ppe_num_entries * sizeof(struct airoha_foe_entry);
@@ -307,7 +307,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
  	if (ppe_num_stats_entries > 0) {
-@@ -1574,16 +1584,32 @@
+@@ -1574,16 +1584,32 @@ int airoha_ppe_init(struct airoha_eth *e
  						     GFP_KERNEL);
  		if (!ppe->foe_stats)
  			return -ENOMEM;
