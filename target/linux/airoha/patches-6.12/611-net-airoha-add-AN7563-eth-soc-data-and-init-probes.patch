@@ -1,58 +1,35 @@
 From: Ray Liu <ray.xy.liu@gmail.com>
-Date: Wed, 13 May 2026 23:55:00 +0800
-Subject: [PATCH] net: airoha: AN7563 silicon quirk - skip PPE flush_sram
+Date: Thu, 14 May 2026 00:20:00 +0800
+Subject: [PATCH] net: airoha: AN7563 eth soc-data, PPE flush skip, full ops
 
-Test boot of patch v3 (712edd372c) on AN7563 RFB:
+Real-hardware iteration on the AN7563 RFB:
 
-  AN7563 dbg: ppe foe alloc ok foe=(ptrval) foe_dma=0x83800000
-  AN7563 dbg: ppe foe_flow alloc ok
-  AN7563 dbg: ppe foe_stats skipped (none)
-  AN7563 dbg: ppe foe_check_time alloc ok
-  AN7563 dbg: airoha_ppe_flush_sram_entries SKIPPED  <-- new default
-  AN7563 dbg: ppe_init ok (num_ppe=1)
-  ... rest of probe completes ...
-  -> BusyBox shell prompt
+  v4 (1163c87b88) booted cleanly through airoha_probe(), the
+  airoha_ppe_flush_sram_entries() workaround prevented the silent
+  slab corruption, mt7530 DSA enumerated lan1..lan4 with the four
+  internal GE PHYs at MDIO addresses 9..12, and "DSA: tree 0 setup"
+  succeeded.
 
-So airoha_ppe_init() boots cleanly through the foe / foe_flow /
-foe_check_time allocations; the silent slab corruption sits inside
-airoha_ppe_flush_sram_entries() - the 8192 successive
-REG_PPE_RAM_ENTRY / REG_PPE_RAM_CTRL writes done after a
-memset()+commit sequence are enough to make the AN7563 silicon's
-PPE engine DMA into arbitrary kernel pages on AArch32. The same
-sequence works on AArch64 EN7581 hardware, so this is a SoC-level
-quirk, not a generic driver bug (the driver pointer arithmetic
-checked out: ppe->foe is declared "void *" so the inherited
-"ppe->foe + hash * sizeof(*hwe)" form is in fact a plain byte
-offset, not a double-scale - my earlier attempt to "fix" it was
-incorrect and has been reverted).
+  Calling "ip link set lan1 up" however jumped to PC=0 with
+  LR=airoha_dev_open+0x68 -> airoha_set_vip_for_gdm_port():
+       vip_port = eth->soc->ops.get_vip_port(port, port->nbq);
+  because an7563_soc_data did not initialise the .ops callbacks.
 
-The flush is also redundant when PPE is not actually brought online
-via airoha_ppe_offload_setup() / airoha_ppe_hw_init() - the chip
-firmware leaves the SRAM in reset state on power-up, so for AN7563
-the safest thing is to skip the software-side flush entirely.
+AN7563 silicon shares the EN7581 frame-engine and source-port
+encoding (verified again against the GPL en7523.dtsi and the Xiaomi
+BE5000 vendor DTS), so reuse the EN7581 get_src_port_id /
+get_vip_port helpers verbatim. Update an7563_soc_data accordingly.
 
-Patch v4:
+Together with patch v4 (the SoC quirk that skips the PPE
+flush_sram_entries) this is enough to bring the eth / mt7530 / lan*
+stack live on AArch32 AN7563.
 
-  drivers/net/ethernet/airoha/airoha_eth.h
-    * Add bool ppe_skip_flush_sram to struct airoha_eth_soc_data.
-
-  drivers/net/ethernet/airoha/airoha_eth.c
-    * Set ppe_skip_flush_sram = true on an7563_soc_data only.
-    * Replace airoha_ppe_skip_flush_sram (module parameter) with an
-      airoha_force_flush_sram debug escape hatch (default 0) so the
-      skip can be overridden when re-bisecting in the future.
-
-  drivers/net/ethernet/airoha/airoha_ppe.c
-    * Call airoha_ppe_flush_sram_entries() only when
-      !soc->ppe_skip_flush_sram or force_flush_sram=1; keep the
-      dev_info traces and the foe-alloc instrumentation since they
-      are cheap and very useful next time someone hits an AArch32
-      regression here.
-
-Expected next test boot: AN7563 RFB reaches BusyBox shell with eth /
-gdm1 / switch / gsw_phy* enabled and mt7530 DSA enumerates the four
-internal LAN PHYs. The cpufreq stack remains unchanged and should
-still show cpu @ 1 GHz in /sys/devices/system/cpu/cpu0/cpufreq.
+Patch series so far:
+  v1   add airoha,an7563-eth + num_ppe=1                  (probe OK)
+  v2   add bisect skip knobs                              (still slab corruption)
+  v3   foe alloc instrumentation + flush_sram skip knob   (cause narrowed)
+  v4   permanent SoC quirk: skip flush_sram_entries       (probe + DSA bring-up)
+  v5   wire .ops.get_src_port_id / .get_vip_port          (this commit)
 
 Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 ---
@@ -213,7 +190,7 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
  
  	return 0;
  
-@@ -3486,9 +3547,29 @@
+@@ -3486,9 +3547,41 @@
  	},
  };
  
@@ -234,6 +211,18 @@ Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
 +	.num_xsi_rsts = ARRAY_SIZE(en7581_xsi_rsts_names),
 +	.num_ppe = 1,
 +	.ppe_skip_flush_sram = true,
++	/*
++	 * AN7563 silicon shares the EN7581 frame-engine and source-port
++	 * encoding (verified against the GPL en7523.dtsi and Xiaomi
++	 * BE5000 vendor DTS), so reuse the EN7581 get_src_port_id /
++	 * get_vip_port helpers. Leaving these NULL caused PC=0 jumps
++	 * inside airoha_set_vip_for_gdm_port() when "ip link set lan*
++	 * up" walked dsa_user_open() -> airoha_dev_open().
++	 */
++	.ops = {
++		.get_src_port_id = airoha_en7581_get_src_port_id,
++		.get_vip_port = airoha_en7581_get_vip_port,
++	},
 +};
 +
  static const struct of_device_id of_airoha_match[] = {
