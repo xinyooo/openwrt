@@ -80,55 +80,60 @@
  * stack, RFB has no uplink PHY). The eth / qdma / mdio / gsw_phy
  * skeleton lives in an7563.dtsi - enable here per board.
  *
- * The hwfd reserved-memory pool is intentionally NOT declared on
- * AN7563 (see comment in an7563.dtsi); the driver falls back to
- * dmam_alloc_coherent() with HW_DSCP_NUM-sized descriptor pools
- * which boots cleanly on the AArch32 RFB.
+ * Two real-hardware boots have shown that the upstream airoha_eth
+ * driver path corrupts a random kernel slab page during hw_init /
+ * qdma_init / ppe_init on this AArch32 SoC (first panic at
+ * for_each_child_of_node, second panic at register_netdev). Until
+ * the driver gains an AArch32 fix (see KNOWN ISSUE block in
+ * an7563.dtsi), leave everything ethernet-related disabled here so
+ * the board still reaches a usable shell - the SoC-level skeleton
+ * in an7563.dtsi is unchanged and can be flipped on with a single
+ * status="okay" sweep once the driver is fixed.
  */
 &eth {
-	status = "okay";
+	status = "disabled";
 };
 
 &gdm1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &switch {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port1 {
 	label = "lan1";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port2 {
 	label = "lan2";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port3 {
 	label = "lan3";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_port4 {
 	label = "lan4";
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy3 {
-	status = "okay";
+	status = "disabled";
 };
 
 &gsw_phy4 {
-	status = "okay";
+	status = "disabled";
 };
