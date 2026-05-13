@@ -80,60 +80,58 @@
  * stack, RFB has no uplink PHY). The eth / qdma / mdio / gsw_phy
  * skeleton lives in an7563.dtsi - enable here per board.
  *
- * Two real-hardware boots have shown that the upstream airoha_eth
- * driver path corrupts a random kernel slab page during hw_init /
- * qdma_init / ppe_init on this AArch32 SoC (first panic at
- * for_each_child_of_node, second panic at register_netdev). Until
- * the driver gains an AArch32 fix (see KNOWN ISSUE block in
- * an7563.dtsi), leave everything ethernet-related disabled here so
- * the board still reaches a usable shell - the SoC-level skeleton
- * in an7563.dtsi is unchanged and can be flipped on with a single
- * status="okay" sweep once the driver is fixed.
+ * This re-enable goes together with patch 611-net-airoha-add-AN7563-
+ * eth-soc-data-and-init-probes which adds a dedicated
+ * "airoha,an7563-eth" SoC data (num_ppe=1, since AN7563 silicon only
+ * exposes a 2-core NPU / single PPE engine instead of EN7581's
+ * 8-core NPU / dual PPE) plus dev_info traces in every init phase,
+ * so a follow-up panic - if any - can be pinned down to a specific
+ * step instead of just "somewhere in airoha_probe".
  */
 &eth {
-	status = "disabled";
+	status = "okay";
 };
 
 &gdm1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &switch {
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_port1 {
 	label = "lan1";
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_port2 {
 	label = "lan2";
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_port3 {
 	label = "lan3";
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_port4 {
 	label = "lan4";
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_phy1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_phy2 {
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_phy3 {
-	status = "disabled";
+	status = "okay";
 };
 
 &gsw_phy4 {
-	status = "disabled";
+	status = "okay";
 };

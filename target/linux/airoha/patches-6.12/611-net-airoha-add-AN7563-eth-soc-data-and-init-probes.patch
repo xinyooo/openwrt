@@ -1,0 +1,174 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Wed, 13 May 2026 23:20:00 +0800
+Subject: [PATCH] net: airoha: add AN7563 eth soc-data and probe-phase tracing
+
+Two real-hardware boots of OpenWrt on the AArch32 AN7563 RFB showed
+the airoha_eth driver completing airoha_hw_init() /
+airoha_qdma_init() / airoha_ppe_init() silently and then trashing
+random kernel slab pages: first boot panicked inside
+for_each_child_of_node() (corrupted OF property->name pointer),
+second boot panicked inside register_netdev() ->
+kmem_cache_alloc_noprof() (corrupted kernfs_node_cache freelist).
+The same driver path works on AArch64 EN7581.
+
+The most visible silicon difference is the NPU - vendor BE5000 DTS
+wires 9 NPU interrupts vs 15 on EN7581, consistent with 2 RV32
+cores vs 8. Per the NPU-core / PPE pairing convention this means
+AN7563 likely exposes only one PPE instance; running with
+num_ppe=2 has airoha_ppe_init() allocating an oversized (~2.5 MiB)
+FOE table and writing PPE2 registers that may not be wired, both
+plausible silent-corruption paths.
+
+Introduce a dedicated "airoha,an7563-eth" compatible and an
+an7563_soc_data with num_ppe=1, plus a small dev_info trace in
+each major init phase so a follow-up panic - if any - is bound to
+a specific step instead of "somewhere in airoha_probe".
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c	2026-05-13 23:20:45.185909023 +0800
++++ b/drivers/net/ethernet/airoha/airoha_eth.c	2026-05-13 23:21:42.272065351 +0800
+@@ -1497,31 +1497,38 @@
+ {
+ 	int err, i;
+ 
++	dev_info(eth->dev, "AN7563 dbg: hw_init enter\n");
+ 	/* disable xsi */
+ 	err = reset_control_bulk_assert(eth->soc->num_xsi_rsts, eth->xsi_rsts);
+ 	if (err)
+ 		return err;
++	dev_info(eth->dev, "AN7563 dbg: xsi assert ok\n");
+ 
+ 	err = reset_control_bulk_assert(ARRAY_SIZE(eth->rsts), eth->rsts);
+ 	if (err)
+ 		return err;
++	dev_info(eth->dev, "AN7563 dbg: fe/pdma/qdma assert ok\n");
+ 
+ 	err = reset_control_bulk_deassert(eth->soc->num_xsi_rsts, eth->xsi_rsts);
+ 	if (err)
+ 		return err;
++	dev_info(eth->dev, "AN7563 dbg: xsi deassert ok\n");
+ 
+ 	msleep(20);
+ 	err = reset_control_bulk_deassert(ARRAY_SIZE(eth->rsts), eth->rsts);
+ 	if (err)
+ 		return err;
++	dev_info(eth->dev, "AN7563 dbg: fe/pdma/qdma deassert ok\n");
+ 
+ 	msleep(20);
+ 	err = airoha_fe_init(eth);
+ 	if (err)
+ 		return err;
++	dev_info(eth->dev, "AN7563 dbg: fe_init ok\n");
+ 
+ 	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
+ 		err = airoha_qdma_init(pdev, eth, &eth->qdma[i]);
++		dev_info(eth->dev, "AN7563 dbg: qdma_init[%d] -> %d\n", i, err);
+ 		if (err)
+ 			goto error;
+ 	}
+@@ -1529,6 +1536,8 @@
+ 	err = airoha_ppe_init(eth);
+ 	if (err)
+ 		goto error;
++	dev_info(eth->dev, "AN7563 dbg: ppe_init ok (num_ppe=%d)\n",
++		 eth->soc->num_ppe);
+ 
+ 	set_bit(DEV_STATE_INITIALIZED, &eth->state);
+ 
+@@ -3230,6 +3239,10 @@
+ 
+ 	eth->dev = &pdev->dev;
+ 
++	dev_info(eth->dev,
++		 "AN7563 dbg: probe enter, version=0x%x num_ppe=%d num_xsi_rsts=%d\n",
++		 eth->soc->version, eth->soc->num_ppe, eth->soc->num_xsi_rsts);
++
+ 	err = dma_set_mask_and_coherent(eth->dev, DMA_BIT_MASK(32));
+ 	if (err) {
+ 		dev_err(eth->dev, "failed configuring DMA mask\n");
+@@ -3269,6 +3282,7 @@
+ 		dev_err(eth->dev, "failed to get bulk xsi reset lines\n");
+ 		return err;
+ 	}
++	dev_info(eth->dev, "AN7563 dbg: xsi_rsts bulk_get ok\n");
+ 
+ 	eth->napi_dev = alloc_netdev_dummy(0);
+ 	if (!eth->napi_dev)
+@@ -3282,9 +3296,12 @@
+ 	err = airoha_hw_init(pdev, eth);
+ 	if (err)
+ 		goto error_netdev_free;
++	dev_info(eth->dev, "AN7563 dbg: hw_init complete\n");
+ 
+-	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++)
++	for (i = 0; i < ARRAY_SIZE(eth->qdma); i++) {
+ 		airoha_qdma_start_napi(&eth->qdma[i]);
++		dev_info(eth->dev, "AN7563 dbg: qdma_start_napi[%d] ok\n", i);
++	}
+ 
+ 	for_each_child_of_node(pdev->dev.of_node, np) {
+ 		if (!of_device_is_compatible(np, "airoha,eth-mac"))
+@@ -3293,16 +3310,19 @@
+ 		if (!of_device_is_available(np))
+ 			continue;
+ 
++		dev_info(eth->dev, "AN7563 dbg: alloc_gdm_port for %pOFn\n", np);
+ 		err = airoha_alloc_gdm_port(eth, np);
+ 		if (err) {
+ 			of_node_put(np);
+ 			goto error_napi_stop;
+ 		}
+ 	}
++	dev_info(eth->dev, "AN7563 dbg: all alloc_gdm_port done\n");
+ 
+ 	err = airoha_register_gdm_devices(eth);
+ 	if (err)
+ 		goto error_napi_stop;
++	dev_info(eth->dev, "AN7563 dbg: register_gdm_devices done\n");
+ 
+ 	return 0;
+ 
+@@ -3486,9 +3506,28 @@
+ 	},
+ };
+ 
++/*
++ * AN7563 / AN7552 silicon shares the EN7581 frame-engine, QDMA, GSW and
++ * chip-SCU register map (cross-checked against the vendor en7523.dtsi
++ * GPL drop and the Xiaomi BE5000 vendor DTS), but exposes a smaller NPU
++ * cluster - 2 RV32 cores instead of EN7581's 8. Per the NPU core / PPE
++ * engine pairing convention this likely means only a single PPE
++ * instance is wired on AN7563. Running the EN7581 num_ppe=2 path on
++ * AArch32 AN7563 hardware produced random kernel slab corruption inside
++ * airoha_probe(); use num_ppe=1 here and ship a dedicated compatible
++ * so DTS does not need to fall back to "airoha,en7581-eth".
++ */
++static const struct airoha_eth_soc_data an7563_soc_data = {
++	.version = 0x7563,
++	.xsi_rsts_names = en7581_xsi_rsts_names,
++	.num_xsi_rsts = ARRAY_SIZE(en7581_xsi_rsts_names),
++	.num_ppe = 1,
++};
++
+ static const struct of_device_id of_airoha_match[] = {
+ 	{ .compatible = "airoha,en7581-eth", .data = &en7581_soc_data },
+ 	{ .compatible = "airoha,an7583-eth", .data = &an7583_soc_data },
++	{ .compatible = "airoha,an7563-eth", .data = &an7563_soc_data },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, of_airoha_match);
+--- a/drivers/net/ethernet/airoha/airoha_eth.h	2026-05-13 23:20:45.185909023 +0800
++++ b/drivers/net/ethernet/airoha/airoha_eth.h	2026-05-13 23:21:49.683075942 +0800
+@@ -656,6 +656,11 @@
+ 	return eth->soc->version == 0x7581;
+ }
+ 
++static inline bool airoha_is_7563(struct airoha_eth *eth)
++{
++	return eth->soc->version == 0x7563;
++}
++
+ static inline bool airoha_is_7583(struct airoha_eth *eth)
+ {
+ 	return eth->soc->version == 0x7583;

@@ -509,7 +509,7 @@
 		 * SKUs in this OpenWrt subtarget do not use the PCS path.
 		 */
 		eth: ethernet@1fb50000 {
-			compatible = "airoha,an7563-eth", "airoha,en7581-eth";
+			compatible = "airoha,an7563-eth";
 			reg = <0x1fb50000 0x2600>,
 			      <0x1fb54000 0x2000>,
 			      <0x1fb56000 0x2000>;
