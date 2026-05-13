@@ -491,12 +491,15 @@
 			reg-names = "fe", "qdma0", "qdma1";
 
 			/*
-			 * The upstream airoha_eth driver (EN7581 path) calls
-			 * devm_reset_control_bulk_get_exclusive() for the xsi
-			 * MAC reset triple ("hsi0-mac", "hsi1-mac", "hsi-mac")
-			 * unconditionally, so they must be wired even on AN7563
-			 * SKUs that do not connect any XSI / HSGMII serdes -
-			 * otherwise probe will fail with -ENOENT.
+			 * The upstream airoha_eth driver (EN7581 path,
+			 * see drivers/net/ethernet/airoha/airoha_eth.c
+			 * en7581_xsi_rsts_names[] after patch 310-07) calls
+			 * devm_reset_control_bulk_get_exclusive() for the
+			 * xsi MAC reset quadruple ("hsi0-mac", "hsi1-mac",
+			 * "hsi-mac", "xfp-mac") unconditionally, so all four
+			 * must be wired even on AN7563 SKUs that do not
+			 * connect any XSI / HSGMII / XFP serdes - otherwise
+			 * probe fails with -ENOENT.
 			 *
 			 * AN7563 SCU re-uses the EN7581 reset bit layout
 			 * (vendor ecnt_scu.c shares the TCSUPPORT_CPU_EN7581 |
@@ -509,9 +512,11 @@
 				 <&scu EN7581_FE_QDMA_RST>,
 				 <&scu EN7581_DUAL_HSI0_MAC_RST>,
 				 <&scu EN7581_DUAL_HSI1_MAC_RST>,
-				 <&scu EN7581_HSI_MAC_RST>;
+				 <&scu EN7581_HSI_MAC_RST>,
+				 <&scu EN7581_XFP_MAC_RST>;
 			reset-names = "fe", "pdma", "qdma",
-				      "hsi0-mac", "hsi1-mac", "hsi-mac";
+				      "hsi0-mac", "hsi1-mac", "hsi-mac",
+				      "xfp-mac";
 
 			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>,
