@@ -1,0 +1,92 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 01:45:00 +0800
+Subject: [PATCH] net: airoha: AN7563 - bypass PPE in airoha_dev_open when no NPU
+
+Root cause of the AN7563 "lan/eth0 rx_packets++ from FE counter but
+driver never sees a packet, IRQ count = 0, AN7563 RX trace never
+fires" symptom:
+
+  airoha_dev_open() sets GDM_FWD_CFG so that frame-engine traffic on a
+  GDM port is forwarded to FE_PSE_PORT_PPE1, expecting the PPE engine
+  to lookup the FOE table and (on miss) forward the packet to the QDMA
+  CPU DMA port.
+
+  But airoha_ppe_hw_init() (which programs PPE TB_BASE, TB_HASH_CFG,
+  TB_CFG and the per-port "default CPU port" rule) only runs from
+  airoha_ppe_offload_setup() the first time a netfilter flow rule is
+  added, and that path only fires once airoha_ppe_npu_get() returns a
+  live NPU. EN7581 / AN7583 have an NPU firmware blob that brings the
+  PPE engine online on boot. AN7563 has no NPU node in our DTS at all
+  (we have not landed the GPL NPU image), so airoha_ppe_offload_setup()
+  is never reached and PPE1 remains in reset state.
+
+  In that state the FE happily delivers frames into PPE1 (the GDM RX
+  hardware counters keep ticking, which is what eth0/statistics/
+  rx_packets reads) but PPE1 silently drops them. They never reach
+  QDMA, no airoha_irq_handler fires, no NAPI poll runs.
+
+Fix: add a per-SoC "no_npu" quirk. When set, airoha_dev_open() picks
+FE_PSE_PORT_CDM1 / CDM2 (the QDMA CPU DMA ports) directly instead of
+FE_PSE_PORT_PPE1, so the FE-to-CPU path stays open even without a PPE
+hw_init step. Set it on AN7563 only; EN7581 / AN7583 keep the original
+PPE1 path so flow offload still works for them.
+
+Also add a one-shot dev_info on each ndo_open so we can see in dmesg
+which pse_port a given GDM netdev ended up wired to.
+
+Verified by build only on this commit; runtime verification will land
+in the next iteration once the test board boots the new image.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.h
++++ b/drivers/net/ethernet/airoha/airoha_eth.h
+@@ -594,6 +594,16 @@ struct airoha_eth_soc_data {
+ 	 * so on AN7563 we can safely skip it.
+ 	 */
+ 	bool ppe_skip_flush_sram;
++	/*
++	 * AN7563 has no NPU node / NPU firmware bring-up, so
++	 * airoha_ppe_offload_setup() never runs and the PPE engine
++	 * stays in reset state. The default forwarding rule set by
++	 * airoha_dev_open() (pse_port = FE_PSE_PORT_PPE1) leaves
++	 * frame-engine packets stuck inside PPE1 instead of being
++	 * delivered to QDMA. On AN7563 bypass PPE and forward
++	 * directly to the QDMA CPU DMA port (CDM1/CDM2).
++	 */
++	bool no_npu;
+ 	struct {
+ 		int (*get_src_port_id)(struct airoha_gdm_port *port, int nbq);
+ 		u32 (*get_vip_port)(struct airoha_gdm_port *port, int nbq);
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -1778,8 +1778,21 @@ static int airoha_dev_open(struct net_de
+ 	int err, len = ETH_HLEN + dev->mtu + ETH_FCS_LEN;
+ 	struct airoha_gdm_port *port = netdev_priv(dev);
+ 	struct airoha_qdma *qdma = port->qdma;
++	struct airoha_eth *eth = qdma->eth;
++	u8 qdma_id = qdma - &eth->qdma[0];
+ 	u32 pse_port = FE_PSE_PORT_PPE1;
+ 
++	/* AN7563 has no NPU bring-up: PPE never gets airoha_ppe_hw_init(),
++	 * so forwarding GDM packets through PPE1 silently drops them.
++	 * Bypass PPE and forward straight to QDMA CPU DMA port instead.
++	 */
++	if (eth->soc->no_npu)
++		pse_port = qdma_id ? FE_PSE_PORT_CDM2 : FE_PSE_PORT_CDM1;
++
++	dev_info(eth->dev,
++		 "AN7563 dbg: dev_open dev=%s gdm_id=%u pse_port=%u (no_npu=%d)\n",
++		 dev->name, port->id, pse_port, eth->soc->no_npu);
++
+ #if defined(CONFIG_PCS_AIROHA)
+ 	if (airhoa_is_phy_external(port)) {
+ 		err = phylink_of_phy_connect(port->phylink, dev->dev.of_node, 0);
+@@ -3564,6 +3577,7 @@ static const struct airoha_eth_soc_data
+ 	.num_xsi_rsts = ARRAY_SIZE(en7581_xsi_rsts_names),
+ 	.num_ppe = 1,
+ 	.ppe_skip_flush_sram = true,
++	.no_npu = true,
+ 	/*
+ 	 * AN7563 silicon shares the EN7581 frame-engine and source-port
+ 	 * encoding (verified against the GPL en7523.dtsi and Xiaomi
