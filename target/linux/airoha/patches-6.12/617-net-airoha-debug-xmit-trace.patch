@@ -1,0 +1,43 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 09:55:00 +0800
+Subject: [PATCH] net: airoha: AN7563 debug - log dev_xmit (TEMP)
+
+Diagnostic data so far on AN7563:
+
+  * airoha_eth probe + airoha_dev_open succeed
+  * mt7530 enumerate lan1..lan4, lan3 link up 1Gbps/Full
+  * FE GDM1 hw RX counter ticks (eth0/statistics/rx_packets rising)
+  * FE GDM1 hw TX counter stays 0 even after EVB-side ping
+  * airoha_eth.0..7 IRQ count in /proc/interrupts: 0 (QDMA never IRQs)
+  * NPU mbox / wdt IRQ count: 0 (NPU firmware probably not running)
+
+To isolate where TX dies (DSA / br-lan vs driver xmit vs QDMA HW),
+trace airoha_dev_xmit() both on entry and right before NETDEV_TX_OK.
+Debug only.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -2135,6 +2135,10 @@
+ 	u16 index;
+ 	u8 fport;
+ 
++	dev_info_ratelimited(qdma->eth->dev,
++		"AN7563 TX: xmit dev=%s gdm_id=%u len=%u uses_dsa=%d\n",
++		dev->name, port->id, skb->len, netdev_uses_dsa(dev));
++
+ 	qid = airoha_qdma_get_txq(qdma, skb_get_queue_mapping(skb));
+ 	tag = airoha_get_dsa_tag(skb, dev);
+ 
+@@ -2243,6 +2247,10 @@
+ 
+ 	spin_unlock_bh(&q->lock);
+ 
++	dev_info_ratelimited(qdma->eth->dev,
++		"AN7563 TX: queued qid=%d head=%u fport=%u msg0=0x%x msg1=0x%x\n",
++		qid, index, fport, msg0, msg1);
++
+ 	return NETDEV_TX_OK;
+ 
+ error_unmap:
