@@ -1,0 +1,63 @@
+From: Ray Liu <ray.xy.liu@gmail.com>
+Date: Thu, 14 May 2026 09:22:00 +0800
+Subject: [PATCH] net: airoha: AN7563 debug - log RX SPORT decoding (TEMP)
+
+Even with NPU node + GPL firmware in place (commit 940ec67ce5) and
+FW_LOADER_USER_HELPER disabled so request_firmware() short-circuits
+to -EPROBE_DEFER until rootfs mount (commit 35e45e9bc2), Windows ping
+to / from AN7563 still hits 100% loss with no AN7563 RX trace ever
+firing in airoha_qdma_rx_process().
+
+Likely root cause: AN7563 silicon fills the FE QDMA RX descriptor
+SPORT field (QDMA_ETH_RXMSG_SPORT_MASK) with a value outside the
+EN7581 ranges (0x18, 0x16, 0x10..0x14, 0x2..0x4) that
+airoha_qdma_get_gdm_port() recognises, so every RX descriptor returns
+-EINVAL and lands at free_frag long before the existing
+dev_info_ratelimited() in the DSA branch.
+
+Add temporary dev_info_ratelimited() traces inside
+airoha_qdma_get_gdm_port() (both success and EINVAL paths) and at the
+free_frag goto in airoha_qdma_rx_process() so we can see in dmesg
+exactly what SPORT value the silicon fills and whether the packet is
+being dropped because of an unknown SPORT or because eth->ports[p]
+is NULL.
+
+Debug only - drop or fold into a permanent AN7563 SPORT mapping fix
+once the value is known.
+
+Signed-off-by: Ray Liu <ray.xy.liu@gmail.com>
+---
+--- a/drivers/net/ethernet/airoha/airoha_eth.c
++++ b/drivers/net/ethernet/airoha/airoha_eth.c
+@@ -629,9 +629,16 @@
+ 		port = sport - 1;
+ 		break;
+ 	default:
++		dev_info_ratelimited(eth->dev,
++			"AN7563 RX: get_gdm_port EINVAL sport=0x%x msg1=0x%08x\n",
++			sport, msg1);
+ 		return -EINVAL;
+ 	}
+ 
++	dev_info_ratelimited(eth->dev,
++		"AN7563 RX: get_gdm_port sport=0x%x -> port=%u (eth->ports[port]=%s)\n",
++		sport, port, eth->ports[port] ? "valid" : "NULL");
++
+ 	return port >= ARRAY_SIZE(eth->ports) ? -EINVAL : port;
+ }
+ 
+@@ -671,8 +678,13 @@
+ 			goto free_frag;
+ 
+ 		p = airoha_qdma_get_gdm_port(eth, desc);
+-		if (p < 0 || !eth->ports[p])
++		if (p < 0 || !eth->ports[p]) {
++			dev_info_ratelimited(eth->dev,
++				"AN7563 RX: free_frag p=%d eth->ports[p]=%s\n",
++				p,
++				(p >= 0 && p < (int)ARRAY_SIZE(eth->ports) && eth->ports[p]) ? "valid" : "NULL");
+ 			goto free_frag;
++		}
+ 
+ 		port = eth->ports[p];
+ 		if (!q->skb) { /* first buffer */
